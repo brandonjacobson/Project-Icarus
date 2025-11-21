@@ -23,7 +23,7 @@ rpm_hover = np.sqrt(hover_thrust / k_thrust) #About 3130 rpm
 
 #PID Gains
 kp = 2.2  #Proportional (2.2)
-ki = 0.06  #Integral (0)
+ki = 0.06  #Integral (0.06)
 kd = 2.7  #Derivative (2.7)
 
 #PID State
@@ -60,7 +60,7 @@ def PID(setpoint, pv, kp, ki, kd, previous_error, integral, dt, derivative_prev,
     derivative_filtered = alpha * derivative_prev + (1 - alpha) * derivative_raw #Low-Pass Filter
     control = kp * error + ki * integral + kd * derivative_filtered
     #Anti-Windup (Clamping)
-    integral = np.clip(integral, -20.0, 20.0)
+    integral = np.clip(integral, -30.0, 30.0)
     return control, error, integral, derivative_filtered
 
 #Main Control Loop
@@ -71,8 +71,8 @@ for i in range(steps):
     disturbance = 0.0
     #if 20.0 <= time <= 22.0:
      #   disturbance = -2.0 #Downward wind force (2 N)
-    #if time >= 20.0:
-    #    disturbance = -1.0 #Constand Downward wind (1 N)
+    if time >= 20.0:
+        disturbance = -1.0 #Constand Downward wind (1 N)
 
     #Step Testing
     #if 20.0 <= time <= 40.0:
