@@ -733,9 +733,18 @@ def update_frame(frame):
     return all_artists
 
 
-# Create animation
-num_frames = len(x_log) // 5
+# Create animation — cap at 15 s (each frame = 5 sim steps = 0.05 s → 300 frames)
+gif_duration_s = 15.0
+frames_per_sim_step = 5
+max_frames = int(gif_duration_s / (dt * frames_per_sim_step))
+num_frames = min(len(x_log) // frames_per_sim_step, max_frames)
 anim = animation.FuncAnimation(fig, update_frame, frames=num_frames,
                                interval=50, blit=False)
+
+# Save as GIF (requires Pillow: pip install Pillow)
+gif_path = 'drone_trajectory.gif'
+print(f"Saving animation to {gif_path} ...")
+anim.save(gif_path, writer=animation.PillowWriter(fps=20))
+print("Saved.")
 
 plt.show()
