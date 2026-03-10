@@ -1,18 +1,31 @@
-#6-DoF Quadcopter Simulation Notes
-## -------Current Project--------
+# 6-DoF Simulation Final Report
+## 1. System Architecture
 
-## Description
-This simulation models a quadcopter drone using an animated Python graph to visualize movement in a 3D space. The quadcopter flies using waypoints, controlled by multiple
-PID controllers to control attitude, altitude, and motor thrust. 
+The current iteration of the Icarus simulator has transitioned from a basic PID-controlled plant to a full closed-loop system incorporating multi-sensor fusion and cascaded control logic. The simulation environment models nonlinear 3D quadcopter dynamics, including thrust nonlinearities, motor lag, and Euler-angle attitude kinematics.
+## 2. State Estimation Strategy
 
-## Progress:
-The current state of the simulation allows for waypoint flying, and the quadcopter settles within 3 seconds for targets within 5 meters, with slight growing oscillations
-occuring at targets of 5 meters or farther. Reasoning for this could either be the tuning of the PID controllers not necessarily agreeing in each cascading step, or a fundamental
-problem with the control of attitude. Additionally, when navigating between multiple waypoints, the oscillations grow rapidly and the quadcopter fails to settle after traveling
-10m+. This might be fixed by a change in attitude control. The Euler angle usage should not be a problem, but more an issue with the agreeement between attitude of the drone
-and motor thrust control.
+To mitigate the impact of high-frequency sensor noise on control stability, a bifurcated estimation architecture was implemented:
 
-## Goal:
-The goal of this project is to create a test platform for autonomous functions of the Icarus quadcopter. When this simulation is complete, I can design missions for Icarus
-and directly apply them to the hardware. This platform is also an exercise in understanding the dynamics and control of the quadcopter, as before this project I had a limited
-understanding of Euler angles, 3-dimensional dynamics, and cascading control schemes.
+    Translational Estimation (6-State KF): A Kalman Filter was developed to estimate the translational state vector x=[x,y,z,vx​,vy​,vz​]T. By fusing simulated IMU accelerations with low-frequency GPS and Altimeter measurements, the filter provides a smooth, low-latency estimate of position and velocity. This has successfully resolved previous issues regarding divergent oscillations during long-distance waypoint transitions.
+
+    Attitude Estimation (Complementary Filter): For orientation, a Complementary Filter fuses gyroscope integration (high-frequency) with accelerometer-based tilt sensing (low-frequency). This maintains a stable estimate of the vehicle's roll and pitch without the drift associated with raw integration or the computational cost of a full EKF.
+
+## 3. Control Performance & Verification
+
+The guidance and control pipeline utilizes a cascaded PID architecture. The outer loop manages position tracking by generating target Euler angles and thrust setpoints, which are then passed to a high-rate inner loop for attitude and rate control.
+
+### Key Performance Metrics:
+
+    Steady-State Error: The system demonstrates high precision in trajectory tracking, with a verified steady-state position error of <8 cm during waypoint hovering.
+
+    Transient Response: Step-response analysis of 3-meter multi-axis maneuvers shows a settling time of <3 seconds.
+
+    Stability: The inclusion of derivative filtering and integral anti-windup has effectively dampened the "growing oscillations" observed in earlier, unfiltered versions of the controller.
+
+## 4. Path Forward
+
+The verified Python dynamics and GNC logic are currently being ported to an embedded C++ architecture.
+
+    Objective: Implement an asynchronous flight control loop using MAVSDK.
+
+    Testing: Development of a Hardware-in-the-Loop (HIL) environment to bridge the gap between the 6-DoF simulation and the physical CUAV V5 Nano flight controller via a Raspberry Pi companion computer.
