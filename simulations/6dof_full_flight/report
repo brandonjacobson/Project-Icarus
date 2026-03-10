@@ -1,0 +1,18 @@
+#6-DoF Quadcopter Simulation Notes
+## -------Current Project--------
+
+## Description
+This simulation models a quadcopter drone using an animated Python graph to visualize movement in a 3D space. The quadcopter flies using waypoints, controlled by multiple
+PID controllers to control attitude, altitude, and motor thrust. 
+
+## Progress:
+The current state of the simulation allows for waypoint flying, and the quadcopter settles within 3 seconds for targets within 5 meters, with slight growing oscillations
+occuring at targets of 5 meters or farther. Reasoning for this could either be the tuning of the PID controllers not necessarily agreeing in each cascading step, or a fundamental
+problem with the control of attitude. Additionally, when navigating between multiple waypoints, the oscillations grow rapidly and the quadcopter fails to settle after traveling
+10m+. This might be fixed by a change in attitude control. The Euler angle usage should not be a problem, but more an issue with the agreeement between attitude of the drone
+and motor thrust control.
+
+## Goal:
+The goal of this project is to create a test platform for autonomous functions of the Icarus quadcopter. When this simulation is complete, I can design missions for Icarus
+and directly apply them to the hardware. This platform is also an exercise in understanding the dynamics and control of the quadcopter, as before this project I had a limited
+understanding of Euler angles, 3-dimensional dynamics, and cascading control schemes.
