@@ -3,7 +3,7 @@
 A quadcopter flight dynamics simulator built from scratch in Python, focused on 
 controls, state estimation, and autonomy research.
 
-![Drone Trajectory Animation](simulations/drone_trajectory.gif)
+![Drone Trajectory Animation](simulations/6dof_full_flight/drone_trajectory.gif)
 
 ## Overview
 
