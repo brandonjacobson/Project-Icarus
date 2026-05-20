@@ -267,38 +267,48 @@ def predict(x, P, a_world, dt):
 gamma = k_torque / k_thrust
 B_mixer = mixer_matrix(rotors, gamma, L)
 
-# LQR Setup
-A_attitude = np.zeros((6, 6)) # State Space A matrix
-A_attitude[0, 3] = 1 # phi_dot = p
-A_attitude[1, 4] = 1 # theta_dot = q
-A_attitude[2, 5] = 1 # psi_dot = r
+# Full-State LQR Setup
+A_state = np.zeros((12, 12)) # State Space A matrix
+A_state[0, 3] = 1 # x_dot = v_x
+A_state[1, 4] = 1 # y_dot = v_y
+A_state[2, 5] = 1 # z_dot = v_z
+A_state[3, 7] = abs(g) # phi_dot = g * theta (from linearised position control)
+A_state[4, 6] = -abs(g) # theta_dot = -g * phi (from linearised position control)
+A_state[6, 9] = 1 # phi_dot = p
+A_state[7, 10] = 1 # theta_dot = q
+A_state[8, 11] = 1 # psi_dot = r
 
-B_attitude = np.zeros((6, 3)) # State Space B matrix
-B_attitude[3, 0] = 1 / Ixx # phi_ddot = tau_phi / Ixx
-B_attitude[4, 1] = 1 / Iyy # theta_ddot = tau_theta / Iyy
-B_attitude[5, 2] = 1 / Izz # psi_ddot = tau_psi / Izz
+B_state = np.zeros((12, 4)) # State Space B matrix
+B_state[5, 0] = 1/m # z_ddot = thrust / m
+B_state[9, 1] = 1 / Ixx # phi_ddot = tau_phi / Ixx
+B_state[10, 2] = 1 / Iyy # theta_ddot = tau_theta / Iyy
+B_state[11, 3] = 1 / Izz # psi_ddot = tau_psi / Izz
 
 # Q and R Matrices (Bryson's Rule)
+max_x, max_y = 0.5, 0.5 # max position in x and y (m)
+max_z = 0.5 # max position in z (m)
+max_vx, max_vy, max_vz = 3.0, 3.0, 3.0 # max velocity in x and y (m/s)
 max_phi = np.radians(10) # max roll angle in radians
 max_theta = np.radians(10) # max pitch angle in radians
 max_psi = np.radians(20) # max yaw angle in radians
 max_p = np.radians(30) # max roll rate in rad/s
 max_q = np.radians(30) # max pitch rate in rad/s
 max_r = np.radians(30) # max yaw rate in rad/s
+max_T = 5.0 # max thrust pertubation (N)
 max_tau_phi = 0.1 # max roll torque in N*m
 max_tau_theta = 0.1 # max pitch torque in N*m
 max_tau_psi = 0.05 # max yaw torque in N*m
 
-Q_attitude = np.diag([1.0 / max_phi**2, 1.0 / max_theta**2, 1.0 / max_psi**2, 1.0 / max_p**2, 1.0 / max_q**2, 1.0 / max_r**2])
-R_attitude = np.diag([1.0 / max_tau_phi**2, 1.0 / max_tau_theta**2, 1.0 / max_tau_psi**2])
+Q_state = np.diag([1.0 / max_x**2, 1.0 / max_y**2, 1.0 / max_z**2, 1.0 / max_vx**2, 1.0 / max_vy**2, 1.0 / max_vz**2, 1.0 / max_phi**2, 1.0 / max_theta**2, 1.0 / max_psi**2, 1.0 / max_p**2, 1.0 / max_q**2, 1.0 / max_r**2])
+R_state = np.diag([1.0 / max_T**2, 1.0 / max_tau_phi**2, 1.0 / max_tau_theta**2, 1.0 / max_tau_psi**2])
 
 # Solve CARE and compute K
 from scipy.linalg import solve_continuous_are
-P_lqr = solve_continuous_are(A_attitude, B_attitude, Q_attitude, R_attitude)
-K_lqr = np.linalg.inv(R_attitude) @ B_attitude.T @ P_lqr
+P_lqr = solve_continuous_are(A_state, B_state, Q_state, R_state)
+K_lqr = np.linalg.inv(R_state) @ B_state.T @ P_lqr
 
 #Verify stablility by checking that all eigenvalues have strictly negative real parts
-eigenvalues = np.linalg.eigvals(A_attitude - B_attitude @ K_lqr)
+eigenvalues = np.linalg.eigvals(A_state - B_state @ K_lqr)
 print("Closed-loop eigenvalues:", eigenvalues)
 
 # Main Control Loop - MATLAB Drone Simulation and Control Solution
@@ -397,61 +407,22 @@ for i in range(steps):
 
 
 
-    # Position Control (Outer Loop)
-    # Use Kalman Filter state for position and velocity feedback.
-    # KF runs at 100 Hz (every control step) and fuses accelerometer prediction
-    # with 5 Hz GPS and 50 Hz altimeter corrections, giving smooth continuous
-    # estimates. Raw GPS velocity (Δx / 0.2 s) has ~0.7 m/s noise std which
-    # overwhelms the D term; KF velocity noise is ~0.005 m/s after 1 s.
-    x_est  = x_state[0, 0];  vx_est = x_state[3, 0]
-    y_est  = x_state[1, 0];  vy_est = x_state[4, 0]
-    z_est  = x_state[2, 0];  vz_est = x_state[5, 0]
-
-    # Z-axis Control
-    thrust_feedback = np.clip(
-        kp_z * (z_target - z_est) - kd_z * vz_est,
-        -m * abs(g), 15.0 - m * abs(g))
-    # Feedforward + Feedback with tilt compensation.
-    # When tilted, vertical thrust = T·cos(φ)·cos(θ). Scale up so the vertical
-    # component always equals m·|g| + feedback, regardless of attitude.
-    # Capped at cos=0.5 (60° tilt) to prevent runaway at extreme angles.
-    tilt_comp = 1.0 / max(np.cos(phi_meas) * np.cos(theta_meas), 0.5)
-    total_thrust = np.clip((m * abs(g) + thrust_feedback) * tilt_comp, 0.0, 15.0)
-    # X-axis Control -> Desired Pitch Angle
-    theta_desired = np.clip(
-        kp_x * (x_target - x_est) - kd_x * vx_est,
-        np.radians(-25), np.radians(25))
-    # Y-axis Control -> Desired Roll Angle
-    phi_desired = np.clip(
-        -(kp_y * (y_target - y_est) - kd_y * vy_est),
-        np.radians(-25), np.radians(25))
-    # # Yaw Setpoint
-    psi_desired = 0.0  # psi_target
-
-    # Attitude Control (Inner Loop) - LQR
-    x_attitude = np.array([phi_meas - phi_desired, theta_meas - theta_desired, psi_meas - psi_desired, p_meas, q_meas, r_meas])
-    tau_cmd = -K_lqr @ x_attitude
-    tau_phi_cmd = tau_cmd[0]
-    tau_theta_cmd = tau_cmd[1]
-    tau_psi_cmd = tau_cmd[2]
-    # # Roll Control (phi) -> Roll moment
-    # tau_phi_cmd, prev_error_phi, integral_phi, derivative_prev_phi = PID(
-    #     phi_desired, phi_meas, kp_phi, ki_phi, kd_phi, prev_error_phi, integral_phi, dt, derivative_prev_phi, alpha_att,
-    #     prev_pv=prev_pv_phi)
-    # prev_pv_phi = phi_meas
-
-    # # Pitch Control (theta) -> Pitch moment
-    # tau_theta_cmd, prev_error_theta, integral_theta, derivative_prev_theta = PID(
-    #     theta_desired, theta_meas, kp_theta, ki_theta, kd_theta, prev_error_theta, integral_theta, dt, derivative_prev_theta, alpha_att,
-    #     prev_pv=prev_pv_theta)
-    # prev_pv_theta = theta_meas
-
-    # # Yaw Control (psi) -> Yaw moment
-    # tau_psi_cmd, prev_error_psi, integral_psi, derivative_prev_psi = PID(
-    #     psi_desired, psi_meas, kp_psi, ki_psi, kd_psi, prev_error_psi, integral_psi, dt, derivative_prev_psi, alpha_att,
-    #     prev_pv=prev_pv_psi)
-    # prev_pv_psi = psi_meas
-
+    # Full-State LQR Control
+    x_est = x_state[0, 0] 
+    y_est = x_state[1, 0] 
+    z_est = x_state[2, 0]
+    vx_est = x_state[3, 0]
+    vy_est = x_state[4, 0]
+    vz_est = x_state[5, 0]
+    x_full = np.array([x_est - x_target, y_est - y_target, z_est - z_target, vx_est, vy_est, vz_est, phi_meas - 0.0, theta_meas - 0.0, psi_meas - 0.0, p_meas, q_meas, r_meas])
+    
+    u_cmd = -K_lqr @ x_full
+    delta_T = u_cmd[0]  # Thrust perturbation from LQR
+    tau_phi_cmd = u_cmd[1]
+    tau_theta_cmd = u_cmd[2]
+    tau_psi_cmd = u_cmd[3]
+    total_thrust = np.clip(m * abs(g) + delta_T, 0.0, 15.0)
+    
     # Control Allocation (Mixer)
     motor_forces = mixer(B_mixer, total_thrust, tau_phi_cmd, tau_theta_cmd, tau_psi_cmd)
     F1_cmd = motor_forces[0]
@@ -735,7 +706,7 @@ title = ax.set_title('', fontsize=14)
 
 all_artists = arm_lines + [brace_line1, brace_line2, trail_line, active_wp_dot, title]
 
-SAVE_GIF = False
+SAVE_GIF = True
 
 def update_frame(frame):
     idx = min(frame * 5, len(x_log) - 1)
