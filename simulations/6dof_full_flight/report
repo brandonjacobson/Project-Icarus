@@ -63,3 +63,51 @@ below the inner attitude loop to avoid exciting sustained oscillations. This lim
 outer loop aggressiveness regardless of inner loop quality. Full-state LQR across 
 all 12 states is identified as the natural next step, eliminating the cascade 
 constraint entirely.
+
+## 6. Full-State LQR — 12-State Controller
+
+### Architecture
+The cascade architecture (outer position PID + inner attitude LQR) was replaced 
+with a single full-state LQR controller operating on the complete 12-state vector 
+[x, y, z, vx, vy, vz, φ, θ, ψ, p, q, r] with inputs [T, τ_φ, τ_θ, τ_ψ].
+
+The linearised plant at hover captures position-attitude coupling:
+- vx_ddot = |g|·θ  (forward acceleration via pitch)
+- vy_ddot = -|g|·φ (lateral acceleration via roll)
+- vz_ddot = δT/m   (altitude via thrust perturbation)
+
+These coupling terms appear directly in the A matrix, allowing the optimizer to 
+account for the full translational-rotational interaction rather than treating 
+the two loops as independent. Q and R matrices were initialised via Bryson's rule 
+across all 12 states and 4 inputs. The gain matrix K was computed by solving the 
+CARE via scipy.
+
+### Three-Way Performance Comparison
+
+| Metric          | PID    | Cascade LQR | Full-State LQR |
+|-----------------|--------|-------------|----------------|
+| WP0 settle      | 2.2s   | 1.7s        | 1.2s           |
+| WP1 settle      | 4.8s   | 3.8s        | 3.1s           |
+| WP2 settle      | 7.1s   | 6.1s        | 4.8s           |
+| WP3 settle      | 9.6s   | 8.3s        | 6.6s           |
+| WP4 settle      | 12.2s  | 10.5s       | 8.3s           |
+| Mission time    | 12.2s  | 10.5s       | 8.3s           |
+| Final error     | 6.4cm  | 3.9cm       | 7.8cm          |
+
+Full-state LQR completes the mission 32% faster than PID and 21% faster than 
+cascade LQR. Each waypoint settles approximately 30% faster than the cascade 
+architecture.
+
+### Key Finding
+The cascade architecture imposes a hard bandwidth separation constraint — the 
+outer position loop natural frequency must stay well below the inner attitude 
+loop to avoid sustained oscillations. This limits outer loop aggressiveness 
+regardless of inner loop quality. Full-state LQR eliminates this constraint 
+entirely by jointly optimizing position and attitude in a single cost function, 
+allowing the optimizer to determine the correct bandwidth tradeoff automatically.
+
+### Tradeoffs
+Peak attitude angles increased from ±16° (cascade LQR) to ±22° (full-state LQR) 
+during 3-meter step maneuvers, reflecting more aggressive position tracking. 
+Thrust perturbations are larger during braking transitions. Both are within 
+acceptable bounds and damp out cleanly between waypoints.
