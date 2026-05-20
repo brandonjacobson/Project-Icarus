@@ -75,8 +75,8 @@ gyro_timer       = 0.0
 # ---------------------------------------------------------------------------
 
 # Position PID Gains
-kp_x, ki_x, kd_x = 0.147, 0.0, 0.220  # X  — wn=1.2 rad/s, zeta=0.9
-kp_y, ki_y, kd_y = 0.147, 0.0, 0.220  # Y  — wn=1.2 rad/s, zeta=0.9
+kp_x, ki_x, kd_x = 0.147, 0.0, 0.220  # X  — wn=1.2 rad/s, zeta=0.9 (0.147, 0.0, 0.220)
+kp_y, ki_y, kd_y = 0.147, 0.0, 0.220  # Y  — wn=1.2 rad/s, zeta=0.9 (0.147, 0.0, 0.220)
 kp_z, ki_z, kd_z = 4.0,   0.0, 3.2    # Z  — wn=2.0 rad/s, zeta=0.8
 # Attitude PID Gains
 kp_phi,   ki_phi,   kd_phi   = 0.64, 0.0, 0.112  # Roll  — wn=8 rad/s, zeta=0.7
@@ -267,8 +267,43 @@ def predict(x, P, a_world, dt):
 gamma = k_torque / k_thrust
 B_mixer = mixer_matrix(rotors, gamma, L)
 
+# LQR Setup
+A_attitude = np.zeros((6, 6)) # State Space A matrix
+A_attitude[0, 3] = 1 # phi_dot = p
+A_attitude[1, 4] = 1 # theta_dot = q
+A_attitude[2, 5] = 1 # psi_dot = r
+
+B_attitude = np.zeros((6, 3)) # State Space B matrix
+B_attitude[3, 0] = 1 / Ixx # phi_ddot = tau_phi / Ixx
+B_attitude[4, 1] = 1 / Iyy # theta_ddot = tau_theta / Iyy
+B_attitude[5, 2] = 1 / Izz # psi_ddot = tau_psi / Izz
+
+# Q and R Matrices (Bryson's Rule)
+max_phi = np.radians(10) # max roll angle in radians
+max_theta = np.radians(10) # max pitch angle in radians
+max_psi = np.radians(20) # max yaw angle in radians
+max_p = np.radians(30) # max roll rate in rad/s
+max_q = np.radians(30) # max pitch rate in rad/s
+max_r = np.radians(30) # max yaw rate in rad/s
+max_tau_phi = 0.1 # max roll torque in N*m
+max_tau_theta = 0.1 # max pitch torque in N*m
+max_tau_psi = 0.05 # max yaw torque in N*m
+
+Q_attitude = np.diag([1.0 / max_phi**2, 1.0 / max_theta**2, 1.0 / max_psi**2, 1.0 / max_p**2, 1.0 / max_q**2, 1.0 / max_r**2])
+R_attitude = np.diag([1.0 / max_tau_phi**2, 1.0 / max_tau_theta**2, 1.0 / max_tau_psi**2])
+
+# Solve CARE and compute K
+from scipy.linalg import solve_continuous_are
+P_lqr = solve_continuous_are(A_attitude, B_attitude, Q_attitude, R_attitude)
+K_lqr = np.linalg.inv(R_attitude) @ B_attitude.T @ P_lqr
+
+#Verify stablility by checking that all eigenvalues have strictly negative real parts
+eigenvalues = np.linalg.eigvals(A_attitude - B_attitude @ K_lqr)
+print("Closed-loop eigenvalues:", eigenvalues)
+
 # Main Control Loop - MATLAB Drone Simulation and Control Solution
 for i in range(steps):
+    x_meas_new, y_meas_new, z_meas_new = None, None, None  # To be updated by sensor readings
     time = i * dt
     advance_waypoint(x, y, z)
     # Sensor Updates
@@ -345,13 +380,13 @@ for i in range(steps):
         a_world = R_imu @ np.array([[ax_meas], [ay_meas], [az_meas]]) + np.array([[0], [0], [g]])  # convert accel to world frame and remove gravity
         x_state, P = predict(x_state, P, a_world, dt)
         a_world_prev = a_world  # save for CF correction next step
-        if gps_timer <= 0.0:
+        if gps_timer < dt and x_meas_new is not None:
             z_gps = np.array([[x_meas_new], [y_meas_new]])  # 2D: x,y only
             H_gps = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0]])  # Measures x, y only
             K_gps = P @ H_gps.T @ np.linalg.inv(H_gps @ P @ H_gps.T + R_gps)
             x_state = x_state + K_gps @ (z_gps - H_gps @ x_state)
             P = (np.eye(6) - K_gps @ H_gps) @ P
-        if alt_timer <= 0.0:
+        if alt_timer < dt and z_meas_new is not None:
             z_alt = np.array([[z_meas_new]])
             H_alt = np.array([[0, 0, 1, 0, 0, 0]])  # Measurement matrix for altitude
             R_alt = np.array([[alt_noise_std**2]])  # Measurement noise covariance for altitude
@@ -393,24 +428,29 @@ for i in range(steps):
     # # Yaw Setpoint
     psi_desired = 0.0  # psi_target
 
-    # Attitude Control (Inner Loop)
-    # Roll Control (phi) -> Roll moment
-    tau_phi_cmd, prev_error_phi, integral_phi, derivative_prev_phi = PID(
-        phi_desired, phi_meas, kp_phi, ki_phi, kd_phi, prev_error_phi, integral_phi, dt, derivative_prev_phi, alpha_att,
-        prev_pv=prev_pv_phi)
-    prev_pv_phi = phi_meas
+    # Attitude Control (Inner Loop) - LQR
+    x_attitude = np.array([phi_meas - phi_desired, theta_meas - theta_desired, psi_meas - psi_desired, p_meas, q_meas, r_meas])
+    tau_cmd = -K_lqr @ x_attitude
+    tau_phi_cmd = tau_cmd[0]
+    tau_theta_cmd = tau_cmd[1]
+    tau_psi_cmd = tau_cmd[2]
+    # # Roll Control (phi) -> Roll moment
+    # tau_phi_cmd, prev_error_phi, integral_phi, derivative_prev_phi = PID(
+    #     phi_desired, phi_meas, kp_phi, ki_phi, kd_phi, prev_error_phi, integral_phi, dt, derivative_prev_phi, alpha_att,
+    #     prev_pv=prev_pv_phi)
+    # prev_pv_phi = phi_meas
 
-    # Pitch Control (theta) -> Pitch moment
-    tau_theta_cmd, prev_error_theta, integral_theta, derivative_prev_theta = PID(
-        theta_desired, theta_meas, kp_theta, ki_theta, kd_theta, prev_error_theta, integral_theta, dt, derivative_prev_theta, alpha_att,
-        prev_pv=prev_pv_theta)
-    prev_pv_theta = theta_meas
+    # # Pitch Control (theta) -> Pitch moment
+    # tau_theta_cmd, prev_error_theta, integral_theta, derivative_prev_theta = PID(
+    #     theta_desired, theta_meas, kp_theta, ki_theta, kd_theta, prev_error_theta, integral_theta, dt, derivative_prev_theta, alpha_att,
+    #     prev_pv=prev_pv_theta)
+    # prev_pv_theta = theta_meas
 
-    # Yaw Control (psi) -> Yaw moment
-    tau_psi_cmd, prev_error_psi, integral_psi, derivative_prev_psi = PID(
-        psi_desired, psi_meas, kp_psi, ki_psi, kd_psi, prev_error_psi, integral_psi, dt, derivative_prev_psi, alpha_att,
-        prev_pv=prev_pv_psi)
-    prev_pv_psi = psi_meas
+    # # Yaw Control (psi) -> Yaw moment
+    # tau_psi_cmd, prev_error_psi, integral_psi, derivative_prev_psi = PID(
+    #     psi_desired, psi_meas, kp_psi, ki_psi, kd_psi, prev_error_psi, integral_psi, dt, derivative_prev_psi, alpha_att,
+    #     prev_pv=prev_pv_psi)
+    # prev_pv_psi = psi_meas
 
     # Control Allocation (Mixer)
     motor_forces = mixer(B_mixer, total_thrust, tau_phi_cmd, tau_theta_cmd, tau_psi_cmd)
@@ -695,6 +735,7 @@ title = ax.set_title('', fontsize=14)
 
 all_artists = arm_lines + [brace_line1, brace_line2, trail_line, active_wp_dot, title]
 
+SAVE_GIF = False
 
 def update_frame(frame):
     idx = min(frame * 5, len(x_log) - 1)
@@ -742,9 +783,10 @@ anim = animation.FuncAnimation(fig, update_frame, frames=num_frames,
                                interval=50, blit=False)
 
 # Save as GIF (requires Pillow: pip install Pillow)
-gif_path = 'drone_trajectory.gif'
-print(f"Saving animation to {gif_path} ...")
-anim.save(gif_path, writer=animation.PillowWriter(fps=20))
-print("Saved.")
+if SAVE_GIF:
+    gif_path = 'drone_trajectory.gif'
+    print(f"Saving animation to {gif_path} ...")
+    anim.save(gif_path, writer=animation.PillowWriter(fps=20))
+    print("Saved.")
 
 plt.show()

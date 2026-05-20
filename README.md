@@ -42,7 +42,8 @@ cascaded PID control, multi-sensor fusion, and a waypoint mission system.
 - [x] Complementary filter attitude estimator
 - [x] Kalman filter position estimator
 - [x] Waypoint mission sequencing
-- [ ] LQR attitude and full-state control
+- [x] LQR attitude control
+- [ ] LQR full-state control
 - [ ] Minimum snap trajectory planning
 - [ ] Extended Kalman Filter (EKF)
 - [ ] C++ port with MAVSDK for CUAV V5 Nano
